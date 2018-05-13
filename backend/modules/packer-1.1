@@ -1,0 +1,71 @@
+#!/usr/bin/python
+
+import json
+import subprocess
+import sys
+import os
+
+TARGET_JSON = 'build-updated.json'
+# TODO: this is also defined in imagebuilder.py of the frontend
+VAR_FILE = '__varfile__'
+OPTIMIZATION_FILE = "__optimization.sh"
+
+with open('build.json') as data_file:
+    build_data = json.load(data_file)
+
+# default builder is qemu
+name = build_data['builders'][0].get('type', "qemu")
+with open('../builder', 'w') as image_url_file:
+    image_url_file.write(name)
+
+if name == "qemu":
+	build_data['builders'][0]['headless'] = True
+	build_data['builders'][0]['qemuargs'].append(["-nographic"])
+
+
+output_directory = build_data['builders'][0].get('output_directory', None)
+if not output_directory:
+    output_directory = "output-" + name
+output_vmname = build_data['builders'][0].get('vm_name', None)
+if not output_vmname:
+    output_vmname = "packer-" + name
+# Process optionals (provision-<X>.json) 
+optional_counter = 0
+while True:
+    optional_filename = "provision-{}.json".format(optional_counter)
+    if not os.path.isfile(optional_filename):
+        break
+    with open(optional_filename) as optional_file:
+        optional_data = json.load(optional_file)
+    build_data['provisioners'].append(optional_data)
+    optional_counter += 1
+# TODO: remove cloud-config run artefacts
+# Process optimization script (__optimization.sh)
+if os.path.isfile(OPTIMIZATION_FILE):
+    optimization_data = {
+        "type": "shell",
+        "script": "{}".format(OPTIMIZATION_FILE)
+    }
+    build_data['provisioners'].append(optimization_data)
+# TODO: process test script as last step
+
+with open(TARGET_JSON, 'w') as outfile:
+    json.dump(build_data, outfile, indent=4)
+
+# Check for variables file named __varfile__ and use it if present.
+varfile_command = ""
+if os.path.isfile(VAR_FILE):
+    varfile_command = "-var-file={}".format(VAR_FILE)
+
+command = "PACKER_LOG=1 packer build {} {}".format(
+    varfile_command, TARGET_JSON)
+retval = subprocess.call(command, shell=True)
+
+if retval is not 0:
+    sys.exit(retval)
+
+if not os.path.isfile("../cancel"):
+    with open('../build.image_url', 'w') as image_url_file:
+        image_url_file.write(output_directory + '/' + output_vmname)
+
+sys.exit(0)
